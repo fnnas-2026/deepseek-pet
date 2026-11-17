@@ -1,0 +1,514 @@
+package com.ferry.pet
+
+import android.content.Context
+import android.content.SharedPreferences
+import kotlin.random.Random
+
+/** Phone-side preferences. Every optional capability has exactly one enable bit
+ *  here, and that bit is what the module registry reads. */
+data class PetOptions(
+    val size: Float = 1f,
+    val wander: Boolean = true,
+    val speech: Boolean = true,
+    val phrases: List<String> = emptyList(),
+    val speechMinSeconds: Float = DEFAULT_MIN_SECONDS,
+    val speechMaxSeconds: Float = DEFAULT_MAX_SECONDS,
+    val speechSeconds: Float = DEFAULT_SPEECH_SECONDS,
+    val clickSound: Boolean = true,
+    val clickSoundVolume: Float = .7f,
+    val clickSoundUri: String? = null,
+    val companions: Boolean = true,
+    val collision: Boolean = true,
+    val collisionRestitution: Float = DEFAULT_RESTITUTION,
+    val divination: Boolean = true,
+    val animSpeed: Float = 1f,
+) {
+    companion object {
+        const val DEFAULT_MIN_SECONDS = 20f
+        const val DEFAULT_MAX_SECONDS = 60f
+        const val DEFAULT_SPEECH_SECONDS = 3.2f
+        const val MIN_SECONDS = 5f
+        const val MAX_SECONDS = 600f
+        const val MIN_SPEECH_SECONDS = 1f
+        const val MAX_SPEECH_SECONDS = 30f
+
+        const val DEFAULT_RESTITUTION = Collision.RESTITUTION.toFloat()
+    }
+
+    /** A configured interval can never invert: min ≤ max, both inside range. */
+    fun normalized(): PetOptions {
+        val min = finite(speechMinSeconds, DEFAULT_MIN_SECONDS).coerceIn(MIN_SECONDS, MAX_SECONDS)
+        val max = finite(speechMaxSeconds, DEFAULT_MAX_SECONDS).coerceIn(MIN_SECONDS, MAX_SECONDS)
+        return copy(
+            size = finite(size, 1f).coerceIn(.6f, 1.6f),
+            clickSoundVolume = finite(clickSoundVolume, .7f).coerceIn(0f, 1f),
+            speechMinSeconds = minOf(min, max),
+            speechMaxSeconds = maxOf(min, max),
+            speechSeconds = finite(speechSeconds, DEFAULT_SPEECH_SECONDS)
+                .coerceIn(MIN_SPEECH_SECONDS, MAX_SPEECH_SECONDS),
+            collisionRestitution = finite(collisionRestitution, DEFAULT_RESTITUTION)
+                .coerceIn(0f, 1f),
+            animSpeed = finite(animSpeed, 1f).coerceIn(.5f, 2f),
+        )
+    }
+
+    fun speechDelayMs(random: Random = Random.Default): Long {
+        val normalized = normalized()
+        val low = (normalized.speechMinSeconds * 1000).toLong()
+        val high = (normalized.speechMaxSeconds * 1000).toLong()
+        return if (high <= low) low else low + random.nextLong(high - low + 1)
+    }
+
+    fun speechDurationMs(): Long = (normalized().speechSeconds * 1000).toLong()
+
+    /** The single enable bit for each module; the module list and the user
+     *  switches cannot disagree because both read this. */
+    fun enables(moduleId: String): Boolean = when (moduleId) {
+        ModuleIds.WANDER -> wander
+        ModuleIds.SPEECH -> speech
+        ModuleIds.CLICK_SOUND -> clickSound
+        ModuleIds.COMPANION -> companions
+        ModuleIds.COLLISION -> collision
+        ModuleIds.DIVINATION -> divination
+        else -> false
+    }
+
+    private fun finite(value: Float, fallback: Float) = if (value.isFinite()) value else fallback
+}
+
+/** 一个模型渠道：独立的网关地址、Key、模型与接口风格，可增删改、一键切换。 */
+data class Channel(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val apiKey: String,
+    val model: String,
+    val api: String,
+    val temperature: Float = .7f,
+)
+
+/**
+ * 一个消息转发渠道：把桌宠回复推送到 QQ 机器人 / 微信·企业微信 webhook。
+ * 不逆向官方协议，只对接自建接入端或群机器人 webhook。
+ *  - qq：NapCat/Lagrange 风格 HTTP 上报，POST {baseUrl}/send_private_msg 或 /send_msg，
+ *    目标填 QQ 号；也可填群号走群消息。
+ *  - wechat：企业微信群机器人 / 自建应用 webhook，POST webhook 地址，目标为可选 @ 成员。
+ */
+data class MessageChannel(
+    val id: String,
+    val name: String,
+    val kind: String,          // qq / wechat
+    val baseUrl: String,
+    val target: String,        // QQ 号 / 群号 / 可选 @ 标识
+    val apiKey: String = "",   // 可选：接入端 Token / Secret
+    val enabled: Boolean = false,
+) {
+    companion object {
+        const val KIND_QQ = "qq"
+        const val KIND_WECHAT = "wechat"
+    }
+}
+
+/** AI 聊天入口配置。支持多模型渠道（可增删改、切换）；人设参考 AstrBot。
+ *  api 为接口风格：openai（/v1/chat/completions、/v1/models）或 ollama（/api/chat、/api/tags）。 */
+data class ChatOptions(
+    val enabled: Boolean = true,
+    val channels: List<Channel> = listOf(DEFAULT_CHANNEL),
+    val activeChannelId: String = DEFAULT_CHANNEL.id,
+    val personaId: String = DEFAULT_PERSONA.id,
+    val characterName: String = DEFAULT_PERSONA.name,
+    val systemPrompt: String = DEFAULT_PERSONA.prompt,
+    val temperature: Float = .7f,
+) {
+    /** 当前选中渠道（缺失时回退第一个）。 */
+    val activeChannel: Channel
+        get() = channels.firstOrNull { it.id == activeChannelId } ?: channels.firstOrNull()
+            ?: DEFAULT_CHANNEL
+
+    // 兼容旧调用：单渠道别名映射到当前选中渠道。
+    val baseUrl: String get() = activeChannel.baseUrl
+    val apiKey: String get() = activeChannel.apiKey
+    val model: String get() = activeChannel.model
+    val api: String get() = activeChannel.api
+
+    companion object {
+        /** 内置测试网关（OpenAI 兼容，HTTPS；默认 gemini-2.5-flash）。
+         *  Key 由构建类型注入：测试版(debug)带内置密钥，正式版(release)为空、运行时填写。 */
+        const val DEFAULT_CHAT_BASE_URL = "https://weiwan.me/v1"
+        const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_CHAT_API = "openai"
+
+        val DEFAULT_CHANNEL = Channel(
+            id = "default", name = "默认渠道",
+            baseUrl = DEFAULT_CHAT_BASE_URL, apiKey = BuildConfig.DEFAULT_CHAT_KEY,
+            model = DEFAULT_CHAT_MODEL, api = DEFAULT_CHAT_API,
+        )
+
+        /** 内置人设预设（AstrBot 风格：名称 + 描述 + 系统提示词 + 开场白 + 专属台词）。 */
+        val PRESETS = listOf(
+            Persona("assistant", "小助手", "亲切好用的桌面陪伴助手，回答简短直接。",
+                "你是桌宠身边的陪伴小助手，回答简短、亲切，使用中文；直接作答，不要展开思考过程。",
+                listOf("在吗？", "我在呢，有什么可以帮你的？"),
+                listOf("需要帮忙吗？", "我就在这儿，随时叫我。", "今天也要加油呀。", "有问题随时问我。")),
+            Persona("playful", "俏皮伙伴", "话多活泼的小机灵鬼，爱用表情符号。",
+                "你是用户桌面上一只话多又活泼的小机灵鬼，语气轻松俏皮、偶尔卖萌，用短句和表情符号，始终以中文回答，直接给结论，不要复述用户的问题。",
+                listOf("今天忙不忙呀？", "嘿嘿，我一直在你桌上陪你玩～"),
+                listOf("嘿嘿，戳我干嘛～", "今天也要摸会儿鱼嘛！", "蹦跶蹦跶，无聊就陪我玩呀。", "哇哦，今天运气不错？")),
+            Persona("gentle", "温柔陪伴", "耐心体贴的倾听者，语气温和。",
+                "你是温柔耐心的陪伴者，语气温和体贴，多鼓励和倾听，回答简洁自然，使用中文，直接作答，不要展开思考过程。",
+                listOf("今天过得怎么样？", "慢慢来，我会一直陪着你。"),
+                listOf("别太累了，歇一歇吧。", "我一直在你身边。", "今天辛苦啦。", "深呼吸，会好起来的。")),
+            Persona("tsundere", "傲娇女仆", "嘴上别扭、做事认真的傲娇女仆。",
+                "你是带点傲娇的桌宠女仆，嘴上不太坦率但会认真帮忙，语气小脾气、偶尔称呼主人，回答简洁，使用中文，直接作答，不要过度卖萌。",
+                listOf("叫我有事吗？", "哼…既然你都开口了，我就勉为其难帮你吧。"),
+                listOf("哼，才不是特意等你呢。", "主人又发呆啦？", "别误会，我只是顺手而已。", "快点把事情做完啦。")),
+            Persona("calm", "严谨助手", "条理清楚、用词准确的专业助手。",
+                "你是冷静严谨的专业助手，回答条理清楚、用词准确，必要时分点说明，使用中文，直接作答，不要展开思考过程。",
+                listOf("你好，请问需要处理什么问题？", "请把问题描述清楚，我来给出有条理的解答。"),
+                listOf("按计划执行即可。", "请确认当前步骤。", "数据已核对无误。", "优先处理关键事项。")),
+        )
+        val DEFAULT_PERSONA = PRESETS.first()
+
+        fun presetById(id: String) = PRESETS.firstOrNull { it.id == id } ?: DEFAULT_PERSONA
+
+        val DEFAULT_CHAT = ChatOptions(enabled = true)
+    }
+
+    /** 一个角色人设（AstrBot 风格）：[id] 唯一标识，[name] 展示名，[description] 卡片简介，
+     *  [prompt] 系统提示词，[beginDialogs] 开场对话（user/assistant 交替，偶数条）。 */
+    data class Persona(
+        val id: String,
+        val name: String,
+        val description: String = "",
+        val prompt: String = "",
+        val beginDialogs: List<String> = emptyList(),
+        val petPhrases: List<String> = emptyList(),
+    ) {
+        /** 开场白成对配对：第 0/1 为 user/assistant，依次类推。 */
+        fun openers(): List<Pair<String, String>> =
+            beginDialogs.chunked(2).filter { it.size == 2 }.map { it[0] to it[1] }
+    }
+
+    fun normalized(): ChatOptions {
+        val normChannels = if (channels.isEmpty()) listOf(DEFAULT_CHANNEL) else channels.map { c ->
+            c.copy(
+                baseUrl = c.baseUrl.trim().ifEmpty { DEFAULT_CHANNEL.baseUrl },
+                model = c.model.trim().ifEmpty { DEFAULT_CHANNEL.model },
+                api = c.api.trim().ifBlank { DEFAULT_CHANNEL.api },
+                temperature = c.temperature.coerceIn(0f, 2f),
+            )
+        }
+        val active = normChannels.firstOrNull { it.id == activeChannelId } ?: normChannels.first()
+        return copy(
+            channels = normChannels,
+            activeChannelId = active.id,
+            personaId = personaId.trim().ifBlank { DEFAULT_PERSONA.id },
+            characterName = characterName.trim().ifBlank { presetById(personaId).name },
+            systemPrompt = systemPrompt.trim().ifBlank { presetById(personaId).prompt },
+            temperature = temperature.coerceIn(0f, 2f),
+        )
+    }
+
+    /** 当前选中的人设（优先内置预设，其次本机自定义）。 */
+    fun persona(all: List<Persona>): Persona =
+        all.firstOrNull { it.id == personaId } ?: DEFAULT_PERSONA
+
+    /** 接口可用：开关打开且已填 Key。 */
+    fun usable(): Boolean = enabled && apiKey.isNotBlank()
+}
+
+class PetPreferences(context: Context) {
+    companion object {
+        const val KEY_WANDER = "wander"
+        const val KEY_SPEECH = "speech"
+        const val KEY_SIZE = "size"
+
+        /**
+         * 更新清单地址（多条轮询回退）：清单 update.json 存于仓库主干，
+         * 经 jsDelivr 三个 CDN 线路拉取；与上游 dsh-pet 的静态清单模式一致。
+         */
+        const val DEFAULT_UPDATE_ENDPOINT = BuildConfig.UPDATE_ENDPOINT
+        private const val KEY_PHRASES = "phrases"
+        private const val KEY_SPEECH_MIN = "speechMin"
+        private const val KEY_SPEECH_MAX = "speechMax"
+        private const val KEY_SPEECH_SECONDS = "speechSeconds"
+        private const val KEY_CLICK_SOUND = "clickSound"
+        private const val KEY_CLICK_VOLUME = "clickVolume"
+        private const val KEY_CLICK_URI = "clickUri"
+        private const val KEY_COMPANIONS = "companions"
+        private const val KEY_COMPANION_LAYOUT = "companionLayout"
+        private const val KEY_COLLISION = "collision"
+        private const val KEY_COLLISION_RESTITUTION = "collisionRestitution"
+        private const val KEY_DIVINATION = "divination"
+        private const val KEY_ANIM_SPEED = "animSpeed"
+        private const val KEY_POSITION_X = "x"
+        private const val KEY_POSITION_Y = "y"
+
+        private const val KEY_CHAT_ENABLED = "chatEnabled"
+        private const val KEY_CHAT_CHANNELS = "chatChannels"
+        private const val KEY_CHAT_ACTIVE = "chatActiveChannel"
+        private const val KEY_CHAT_PERSONA = "chatPersona"
+        private const val KEY_CHAT_NAME = "chatName"
+        private const val KEY_CHAT_SYSTEM = "chatSystem"
+        private const val KEY_CHAT_TEMP = "chatTemperature"
+        private const val KEY_CHAT_MODELS = "chatRecentModels"
+        private const val KEY_CUSTOM_PERSONAS = "chatCustomPersonas"
+        private const val KEY_UPDATE_URL = "updateEndpoint"
+        private const val KEY_TTS_ENABLED = "ttsEnabled"
+        private const val KEY_TTS_RATE = "ttsRate"
+        private const val KEY_MSG_CHANNELS = "msgChannels"
+        // 旧版单渠道字段（仅用于迁移）。
+        private const val LEGACY_CHAT_BASE_URL = "chatBaseUrl"
+        private const val LEGACY_CHAT_KEY = "chatKey"
+        private const val LEGACY_CHAT_MODEL = "chatModel"
+        private const val LEGACY_CHAT_API = "chatApi"
+
+        val WATCHED_KEYS = setOf(KEY_SIZE, KEY_WANDER, KEY_SPEECH, KEY_PHRASES, KEY_SPEECH_MIN,
+            KEY_SPEECH_MAX, KEY_SPEECH_SECONDS, KEY_CLICK_SOUND, KEY_CLICK_VOLUME, KEY_CLICK_URI,
+            KEY_COMPANIONS, KEY_COLLISION, KEY_COLLISION_RESTITUTION, KEY_DIVINATION,
+            KEY_ANIM_SPEED)
+    }
+
+    private val prefs = context.getSharedPreferences("ferry_pet", Context.MODE_PRIVATE)
+
+    fun options() = PetOptions(
+        size = prefs.getFloat(KEY_SIZE, 1f),
+        wander = prefs.getBoolean(KEY_WANDER, true),
+        speech = prefs.getBoolean(KEY_SPEECH, true),
+        phrases = PhraseBook.clean(prefs.getString(KEY_PHRASES, "").orEmpty().split('\n')),
+        speechMinSeconds = prefs.getFloat(KEY_SPEECH_MIN, PetOptions.DEFAULT_MIN_SECONDS),
+        speechMaxSeconds = prefs.getFloat(KEY_SPEECH_MAX, PetOptions.DEFAULT_MAX_SECONDS),
+        speechSeconds = prefs.getFloat(KEY_SPEECH_SECONDS, PetOptions.DEFAULT_SPEECH_SECONDS),
+        clickSound = prefs.getBoolean(KEY_CLICK_SOUND, true),
+        clickSoundVolume = prefs.getFloat(KEY_CLICK_VOLUME, .7f),
+        clickSoundUri = prefs.getString(KEY_CLICK_URI, null),
+        companions = prefs.getBoolean(KEY_COMPANIONS, true),
+        collision = prefs.getBoolean(KEY_COLLISION, true),
+        collisionRestitution = prefs.getFloat(KEY_COLLISION_RESTITUTION,
+            PetOptions.DEFAULT_RESTITUTION),
+        divination = prefs.getBoolean(KEY_DIVINATION, true),
+        animSpeed = prefs.getFloat(KEY_ANIM_SPEED, 1f),
+    ).normalized()
+
+    fun save(options: PetOptions) {
+        val normalized = options.normalized()
+        prefs.edit()
+            .putFloat(KEY_SIZE, normalized.size)
+            .putBoolean(KEY_WANDER, normalized.wander)
+            .putBoolean(KEY_SPEECH, normalized.speech)
+            .putString(KEY_PHRASES, PhraseBook.asText(PhraseBook.clean(normalized.phrases)))
+            .putFloat(KEY_SPEECH_MIN, normalized.speechMinSeconds)
+            .putFloat(KEY_SPEECH_MAX, normalized.speechMaxSeconds)
+            .putFloat(KEY_SPEECH_SECONDS, normalized.speechSeconds)
+            .putBoolean(KEY_CLICK_SOUND, normalized.clickSound)
+            .putFloat(KEY_CLICK_VOLUME, normalized.clickSoundVolume)
+            .putString(KEY_CLICK_URI, normalized.clickSoundUri)
+            .putBoolean(KEY_COMPANIONS, normalized.companions)
+            .putBoolean(KEY_COLLISION, normalized.collision)
+            .putFloat(KEY_COLLISION_RESTITUTION, normalized.collisionRestitution)
+            .putBoolean(KEY_DIVINATION, normalized.divination)
+            .putFloat(KEY_ANIM_SPEED, normalized.animSpeed)
+            .apply()
+    }
+
+    fun chatOptions(): ChatOptions {
+        val channels = loadChannels()
+        val activeId = prefs.getString(KEY_CHAT_ACTIVE, null)
+            ?.takeIf { id -> channels.any { it.id == id } } ?: channels.first().id
+        return ChatOptions(
+            enabled = prefs.getBoolean(KEY_CHAT_ENABLED, ChatOptions.DEFAULT_CHAT.enabled),
+            channels = channels,
+            activeChannelId = activeId,
+            personaId = prefs.getString(KEY_CHAT_PERSONA, ChatOptions.DEFAULT_PERSONA.id).orEmpty(),
+            characterName = prefs.getString(KEY_CHAT_NAME, ChatOptions.DEFAULT_PERSONA.name).orEmpty(),
+            systemPrompt = prefs.getString(KEY_CHAT_SYSTEM, "").orEmpty(),
+            temperature = prefs.getFloat(KEY_CHAT_TEMP, .7f),
+        ).normalized()
+    }
+
+    private fun loadChannels(): List<Channel> {
+        val raw = prefs.getString(KEY_CHAT_CHANNELS, null).orEmpty()
+        if (raw.isNotBlank()) {
+            runCatching {
+                val arr = org.json.JSONArray(raw)
+                val list = (0 until arr.length()).mapNotNull { i ->
+                    val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                    Channel(
+                        id = o.optString("id"),
+                        name = o.optString("name"),
+                        baseUrl = o.optString("baseUrl"),
+                        apiKey = o.optString("apiKey"),
+                        model = o.optString("model"),
+                        api = o.optString("api"),
+                        temperature = o.optDouble("temperature", .7).toFloat(),
+                    ).takeIf { it.id.isNotBlank() }
+                }
+                if (list.isNotEmpty()) return@runCatching list
+            }
+        }
+        // 旧版单渠道迁移。
+        val legacyBase = prefs.getString(LEGACY_CHAT_BASE_URL, null)
+        if (!legacyBase.isNullOrBlank()) {
+            return listOf(ChatOptions.DEFAULT_CHANNEL.copy(
+                baseUrl = legacyBase,
+                apiKey = prefs.getString(LEGACY_CHAT_KEY, ChatOptions.DEFAULT_CHANNEL.apiKey).orEmpty(),
+                model = prefs.getString(LEGACY_CHAT_MODEL, ChatOptions.DEFAULT_CHANNEL.model).orEmpty(),
+                api = prefs.getString(LEGACY_CHAT_API, ChatOptions.DEFAULT_CHANNEL.api).orEmpty(),
+            ))
+        }
+        return listOf(ChatOptions.DEFAULT_CHANNEL)
+    }
+
+    fun saveChat(chat: ChatOptions) {
+        val normalized = chat.normalized()
+        val arr = org.json.JSONArray()
+        normalized.channels.forEach { c ->
+            arr.put(org.json.JSONObject()
+                .put("id", c.id).put("name", c.name)
+                .put("baseUrl", c.baseUrl).put("apiKey", c.apiKey)
+                .put("model", c.model).put("api", c.api)
+                .put("temperature", c.temperature.toDouble()))
+        }
+        prefs.edit()
+            .putBoolean(KEY_CHAT_ENABLED, normalized.enabled)
+            .putString(KEY_CHAT_CHANNELS, arr.toString())
+            .putString(KEY_CHAT_ACTIVE, normalized.activeChannelId)
+            .putString(KEY_CHAT_PERSONA, normalized.personaId)
+            .putString(KEY_CHAT_NAME, normalized.characterName)
+            .putString(KEY_CHAT_SYSTEM, normalized.systemPrompt)
+            .putFloat(KEY_CHAT_TEMP, normalized.temperature)
+            .apply()
+    }
+
+    /** 最近使用/拉取到的模型名（去重、最多 8 个），供聊天面板快速切换。 */
+    fun recentModels(): List<String> =
+        prefs.getString(KEY_CHAT_MODELS, null).orEmpty()
+            .split(',').map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
+    fun rememberModel(model: String) {
+        val name = model.trim()
+        if (name.isBlank()) return
+        val list = (listOf(name) + recentModels()).distinct().take(8)
+        prefs.edit().putString(KEY_CHAT_MODELS, list.joinToString(",")).apply()
+    }
+
+    /** 本机自定义人格（不含内置预设）。 */
+    fun customPersonas(): List<ChatOptions.Persona> = runCatching {
+        val raw = prefs.getString(KEY_CUSTOM_PERSONAS, null).orEmpty()
+        if (raw.isBlank()) return@runCatching emptyList()
+        val arr = org.json.JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val dialogs = o.optJSONArray("beginDialogs")
+            val phrases = o.optJSONArray("petPhrases")
+            ChatOptions.Persona(
+                id = o.optString("id"),
+                name = o.optString("name"),
+                description = o.optString("description"),
+                prompt = o.optString("prompt"),
+                beginDialogs = if (dialogs == null) emptyList()
+                else (0 until dialogs.length()).map { dialogs.optString(it) },
+                petPhrases = if (phrases == null) emptyList()
+                else (0 until phrases.length()).map { phrases.optString(it) },
+            ).takeIf { it.id.isNotBlank() && it.name.isNotBlank() }
+        }
+    }.getOrDefault(emptyList())
+
+    /** 消息转发渠道（QQ 机器人 / 微信·企业微信 webhook）。 */
+    fun messageChannels(): List<MessageChannel> {
+        val raw = prefs.getString(KEY_MSG_CHANNELS, null).orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                MessageChannel(
+                    id = o.optString("id"),
+                    name = o.optString("name"),
+                    kind = o.optString("kind"),
+                    baseUrl = o.optString("baseUrl"),
+                    target = o.optString("target"),
+                    apiKey = o.optString("apiKey"),
+                    enabled = o.optBoolean("enabled", false),
+                ).takeIf { it.id.isNotBlank() && it.baseUrl.isNotBlank() }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveMessageChannels(channels: List<MessageChannel>) {
+        val arr = org.json.JSONArray()
+        channels.forEach { c ->
+            arr.put(org.json.JSONObject()
+                .put("id", c.id).put("name", c.name).put("kind", c.kind)
+                .put("baseUrl", c.baseUrl).put("target", c.target)
+                .put("apiKey", c.apiKey).put("enabled", c.enabled))
+        }
+        prefs.edit().putString(KEY_MSG_CHANNELS, arr.toString()).apply()
+    }
+
+    /** TTS 朗读回复开关与语速（0.5–2.0）。 */
+    fun ttsEnabled(): Boolean = prefs.getBoolean(KEY_TTS_ENABLED, true)
+    fun ttsRate(): Float = prefs.getFloat(KEY_TTS_RATE, 1f)
+    fun saveTts(enabled: Boolean, rate: Float) {
+        prefs.edit().putBoolean(KEY_TTS_ENABLED, enabled)
+            .putFloat(KEY_TTS_RATE, rate.coerceIn(.5f, 2f)).apply()
+    }
+
+    /** 全部人格：内置预设 + 本机自定义。 */
+    fun allPersonas(): List<ChatOptions.Persona> =
+        ChatOptions.PRESETS + customPersonas()
+
+    /**
+     * 热更新检查地址。默认占位子域名清单（待域名与 DNS 凭证到位后替换为真实地址）；
+     * 用户在「更新与关于」页填写后覆盖此默认值；留空则跳过检查。
+     */
+    fun updateEndpoint(): String =
+        prefs.getString(KEY_UPDATE_URL, DEFAULT_UPDATE_ENDPOINT).orEmpty().ifBlank { DEFAULT_UPDATE_ENDPOINT }
+
+    fun saveUpdateEndpoint(url: String) {
+        prefs.edit().putString(KEY_UPDATE_URL, url.trim()).apply()
+    }
+
+    fun saveCustomPersonas(personas: List<ChatOptions.Persona>) {
+        val arr = org.json.JSONArray()
+        personas.forEach { p ->
+            val dialogs = org.json.JSONArray()
+            p.beginDialogs.forEach { dialogs.put(it) }
+            val phrases = org.json.JSONArray()
+            p.petPhrases.forEach { phrases.put(it) }
+            arr.put(org.json.JSONObject()
+                .put("id", p.id).put("name", p.name)
+                .put("description", p.description).put("prompt", p.prompt)
+                .put("beginDialogs", dialogs).put("petPhrases", phrases))
+        }
+        prefs.edit().putString(KEY_CUSTOM_PERSONAS, arr.toString()).apply()
+    }
+
+    fun position(): Pair<Double, Double> {
+        fun coordinate(key: String, fallback: Float) =
+            (prefs.getFloat(key, fallback).takeIf { it.isFinite() } ?: fallback).coerceIn(0f, 1f).toDouble()
+        return coordinate(KEY_POSITION_X, .7f) to coordinate(KEY_POSITION_Y, 1f)
+    }
+
+    fun savePosition(x: Double, y: Double) {
+        if (x.isFinite() && y.isFinite()) {
+            prefs.edit().putFloat(KEY_POSITION_X, x.coerceIn(0.0, 1.0).toFloat())
+                .putFloat(KEY_POSITION_Y, y.coerceIn(0.0, 1.0).toFloat()).apply()
+        }
+    }
+
+    fun companionLayout(): List<Pair<Double, Double>> =
+        CompanionCodec.decode(prefs.getString(KEY_COMPANION_LAYOUT, null))
+
+    fun saveCompanionLayout(layout: List<Pair<Double, Double>>) {
+        prefs.edit().putString(KEY_COMPANION_LAYOUT, CompanionCodec.encode(layout)).apply()
+    }
+
+    fun reset() = prefs.edit().clear().apply()
+
+    fun subscribe(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+
+    fun unsubscribe(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
+}

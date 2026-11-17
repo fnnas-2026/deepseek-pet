@@ -1,0 +1,23 @@
+# 构建产物
+app/build/
+build/
+*.apk
+*.aab
+
+# Gradle
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+local.properties
+
+# 签名证书与本地密钥
+release.keystore
+*.jks
+keystore.properties
+
+# 系统
+.DS_Store
