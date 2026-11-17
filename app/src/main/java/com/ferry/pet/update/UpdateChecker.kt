@@ -60,6 +60,11 @@ object UpdateChecker {
         "gcore.jsdelivr.net",
         "gh-proxy.com",
         "mirror.ghproxy.com",
+        "ghfast.top",
+        "ghproxy.net",
+        "gh.llkk.cc",
+        "kkgithub.com",
+        "hub.gitmirror.com",
     )
 
     private const val MAX_MANIFEST_BYTES = 2 * 1024 * 1024
