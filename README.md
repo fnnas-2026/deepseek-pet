@@ -97,28 +97,36 @@ Release 包需要自配签名：
 
 ## 构建渠道：测试版 / 正式版
 
-- **Debug（测试版）**：内置测试网关与 API Key，可直接联调；`BUILD_FLAVOR=test`。
+- **Debug（测试版）**：测试网关 Key 从本地 `local.properties` 的 `test.chat.key`
+  注入（该文件已被 `.gitignore` 排除，不入库）；缺省留空，运行时填写；`BUILD_FLAVOR=test`。
 - **Release（正式版）**：默认渠道 Key 留空，由用户首次运行时在「模型渠道」页填写，
   不携带内置密钥；`BUILD_FLAVOR=formal`。
 - 密钥与更新清单地址通过 `buildConfigField` 注入（见 `app/build.gradle.kts`），
-  源码里不硬编码正式 Key。
+  源码与版本库里不出现明文 Key。
 
-## 热更新清单
+## 热更新（对齐上游 dsh-pet 的静态清单 + Releases 模式）
 
-更新检查地址固定为腾讯云解析子域 `newapi.800705.xyz`，清单 JSON 路径
-`/app/latest.json`，字段约定见 `update/UpdateChecker.kt`：
+- **清单** `update.json` 存于仓库主干（`main`），App 按 jsDelivr 三个 CDN 线路
+  轮询回退：`cdn.jsdelivr.net` / `fastly.jsdelivr.net` / `gcore.jsdelivr.net`
+  （`/{owner}/{repo}@main/update.json`），任一线路成功即采用。
+- **安装包** 挂在 GitHub Releases 附件，清单里 `apkUrls` 可写多条镜像线路，
+  下载前逐条校验为 HTTPS 且主机在可信白名单（GitHub 域名、jsDelivr、gh-proxy 等）。
+- 清单可选 `sha256`（小写十六进制）与 `size`，落盘后做摘要/大小校验；未填则跳过。
 
 ```json
 {
-  "versionCode": 5,
-  "versionName": "1.4.0",
-  "apkUrl": "https://newapi.800705.xyz/app/deepseek-pet.apk",
+  "versionCode": 7,
+  "versionName": "1.6.0",
+  "apkUrl": "https://github.com/OWNER/REPO/releases/download/v1.6.0/app-release.apk",
+  "apkUrls": ["https://mirror.example/app-release.apk"],
+  "sha256": "可选，小写十六进制",
+  "size": 25174993,
   "changelog": "更新说明…"
 }
 ```
 
-> 该清单与 APK 需由托管方（New-API 网关或静态目录）在对应站点提供；记录在
-> DNSPod 解析到网关 IP。
+> 发版流程：出 Release 并上传 APK → 在 `update.json` 填新 versionCode/versionName、
+> 下载地址、摘要与大小 → 提交到 `main`；App 下次检查即经 CDN 拉到清单并引导安装。
 
 ## 聊天接口配置
 
