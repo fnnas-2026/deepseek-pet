@@ -1,9 +1,11 @@
 {
   "versionCode": 6,
   "versionName": "1.5.0",
-  "apkUrl": "",
-  "apkUrls": [],
-  "sha256": "",
-  "size": 0,
-  "changelog": "基线版本 v1.5.0：悬浮桌宠、AI 聊天、人设、多模型渠道、TTS、QQ/微信消息渠道、无障碍操控、热更新与诊断页。"
+  "apkUrl": "https://github.com/fnnas-2026/deepseek-pet/releases/download/v1.5.0/deepseek-pet-v1.5.0-release.apk",
+  "apkUrls": [
+    "https://github.com/fnnas-2026/deepseek-pet/releases/download/v1.5.0/deepseek-pet-v1.5.0-release.apk"
+  ],
+  "sha256": "d9f72e42f66c5b71c7a4fb6770b5f5a7681c384917361a27d8e4fbe572d8472b",
+  "size": 25174993,
+  "changelog": "v1.5.0：悬浮桌宠 + AI 聊天 + 人设 + 多模型渠道 + TTS + QQ/微信消息渠道 + 无障碍操控 + 热更新。"
 }
