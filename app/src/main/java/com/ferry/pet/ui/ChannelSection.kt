@@ -218,6 +218,12 @@ fun ChannelSection(options: ChatOptions, onChanged: (ChatOptions) -> Unit) {
         OutlinedTextField(value = editBase, onValueChange = { editBase = it },
             modifier = Modifier.fillMaxWidth(),
             label = { Text(stringResource(R.string.chat_base_url)) }, singleLine = true)
+        if (editBase.contains("<账号ID>") || editBase.contains("<ACCOUNT_ID>", true)) {
+            Text(stringResource(R.string.channel_placeholder_account),
+                color = MaterialTheme.colorScheme.error,
+                style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp),
+                modifier = Modifier.padding(top = 4.dp))
+        }
         OutlinedTextField(value = editKey, onValueChange = { editKey = it },
             modifier = Modifier.fillMaxWidth(),
             label = { Text(stringResource(R.string.chat_api_key)) }, singleLine = true)

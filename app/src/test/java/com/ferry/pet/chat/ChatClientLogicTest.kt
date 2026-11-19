@@ -112,4 +112,30 @@ class ChatClientLogicTest {
     fun `businessError returns null for blank body`() {
         assertNull(ChatClient.businessError(""))
     }
+
+    @Test
+    fun `parseOpenRouterQuota renders usage daily remaining and free tier`() {
+        val body = """{"data":{"usage":12.5,"usage_daily":3.2,"limit_remaining":87.5,
+            "is_free_tier":true,"free_model_daily_requests":{"remaining":42}}}"""
+        val text = ChatClient.parseOpenRouterQuota(body)
+        assertTrue(text!!.contains("累计已用 12.5"))
+        assertTrue(text.contains("今日已用 3.2"))
+        assertTrue(text.contains("剩余额度 87.5"))
+        assertTrue(text.contains("免费模型今日剩 42 次"))
+        assertTrue(text.contains("（免费档）"))
+    }
+
+    @Test
+    fun `parseOpenRouterQuota falls back to limit when remaining absent`() {
+        val body = """{"data":{"usage":1,"limit":100}}"""
+        val text = ChatClient.parseOpenRouterQuota(body)
+        assertTrue(text!!.contains("额度上限 100"))
+        assertFalse(text.contains("剩余额度"))
+    }
+
+    @Test
+    fun `parseOpenRouterQuota returns null for empty payload`() {
+        assertNull(ChatClient.parseOpenRouterQuota("{}"))
+        assertNull(ChatClient.parseOpenRouterQuota("not-json"))
+    }
 }

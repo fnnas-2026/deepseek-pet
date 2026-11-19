@@ -215,6 +215,14 @@ data class ChatOptions(
                 "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct", "openai",
                 "在硅基流动控制台新建 API Key，部分开源模型免费；账单需在官网查看。",
                 "https://cloud.siliconflow.cn/account/ak"),
+            FreeModelPreset("github", "GitHub Models（免费额度）",
+                "https://models.github.ai/inference", "openai/gpt-4.1", "openai",
+                "在 GitHub 生成细粒度 PAT（Models → Read-only）后粘贴；模型名带发布者前缀，如 meta/Llama-3.3-70B-Instruct。",
+                "https://github.com/settings/personal-access-tokens"),
+            FreeModelPreset("cloudflare", "Cloudflare Workers AI（免费额度）",
+                "https://api.cloudflare.com/client/v4/accounts/<账号ID>/ai/v1", "@cf/meta/llama-3.1-8b-instruct", "openai",
+                "在 Cloudflare 控制台取 Account ID 与 API Token，把地址中的 <账号ID> 替换为实际值；模型以 @cf/ 开头。",
+                "https://dash.cloudflare.com/profile/api-tokens"),
         )
 
         fun freePresetById(id: String) = FREE_PRESETS.firstOrNull { it.id == id }
@@ -316,6 +324,9 @@ class PetPreferences(context: Context) {
         private const val KEY_TTS_RATE = "ttsRate"
         private const val KEY_MSG_CHANNELS = "msgChannels"
         private const val KEY_AGREED = "agreementAgreed"
+        private const val KEY_ACCOUNT_NAME = "accountName"
+        private const val KEY_ACCOUNT_TOKEN = "accountToken"
+        private const val KEY_ACCOUNT_QUOTA = "accountQuota"
         // 旧版单渠道字段（仅用于迁移）。
         private const val LEGACY_CHAT_BASE_URL = "chatBaseUrl"
         private const val LEGACY_CHAT_KEY = "chatKey"
@@ -514,6 +525,27 @@ class PetPreferences(context: Context) {
     fun saveTts(enabled: Boolean, rate: Float) {
         prefs.edit().putBoolean(KEY_TTS_ENABLED, enabled)
             .putFloat(KEY_TTS_RATE, rate.coerceIn(.5f, 2f)).apply()
+    }
+
+    /** 第三方账号本地会话态：仅保存展示名与额度说明，令牌不外显。 */
+    fun accountName(): String = prefs.getString(KEY_ACCOUNT_NAME, "").orEmpty()
+    fun accountQuotaLabel(): String = prefs.getString(KEY_ACCOUNT_QUOTA, "").orEmpty()
+    fun accountLoggedIn(): Boolean = prefs.getString(KEY_ACCOUNT_TOKEN, null).orEmpty().isNotBlank()
+
+    fun saveAccountSession(name: String, token: String, quotaLabel: String) {
+        prefs.edit()
+            .putString(KEY_ACCOUNT_NAME, name.trim())
+            .putString(KEY_ACCOUNT_TOKEN, token.trim())
+            .putString(KEY_ACCOUNT_QUOTA, quotaLabel.trim())
+            .apply()
+    }
+
+    fun clearAccountSession() {
+        prefs.edit()
+            .remove(KEY_ACCOUNT_NAME)
+            .remove(KEY_ACCOUNT_TOKEN)
+            .remove(KEY_ACCOUNT_QUOTA)
+            .apply()
     }
 
     /** 全部人格：内置预设 + 本机自定义。 */

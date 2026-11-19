@@ -185,8 +185,9 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
     /**
      * 查询账户余额 / 额度。仅对接提供公开 Bearer 接口的官方平台：
      *  - DeepSeek：GET /user/balance（balance_infos[].total_balance / currency）；
-     *  - OpenRouter：GET /api/v1/key（usage / limit / limit_remaining）。
-     * 其余平台（Groq / 智谱 / 硅基流动等）无公开余额接口，返回 [BalanceResult.Unsupported]。
+     *  - OpenRouter：GET /api/v1/key（usage / usage_daily / limit / limit_remaining / 免费档）。
+     * 其余平台（Groq / 智谱 / 通义 / 硅基流动 / GitHub Models / Cloudflare）无公开余额接口，
+     * 返回 [BalanceResult.Unsupported]，引导去官网控制台查看。
      */
     suspend fun fetchBalance(): BalanceResult = withContext(Dispatchers.IO) {
         if (channel.apiKey.isBlank()) return@withContext BalanceResult.Failure("未填写 API Key")
@@ -237,27 +238,8 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
             if (!resp.isSuccessful) return BalanceResult.Failure(friendlyError(resp.code, body))
             val json = runCatching { JSONObject(body) }.getOrNull()
                 ?: return BalanceResult.Failure("额度返回无法解析")
-            val data = json.optJSONObject("data") ?: json
-            val usage = data.optDouble("usage", Double.NaN)
-            val limit = data.optDouble("limit", Double.NaN)
-            val limitRemaining = data.optDouble("limit_remaining", Double.NaN)
-            val freeDaily = data.optJSONObject("free_model_daily_requests")
-                ?.optInt("remaining", -1).takeIf { it != -1 }
-            val sb = StringBuilder()
-            if (!usage.isNaN()) sb.append("已用 $usage")
-            if (!limitRemaining.isNaN()) {
-                if (sb.isNotEmpty()) sb.append("，")
-                sb.append("剩余额度 $limitRemaining")
-            } else if (!limit.isNaN()) {
-                if (sb.isNotEmpty()) sb.append("，")
-                sb.append("额度上限 $limit")
-            }
-            freeDaily?.let {
-                if (sb.isNotEmpty()) sb.append("，")
-                sb.append("免费模型今日剩 $it 次")
-            }
-            if (sb.isEmpty()) BalanceResult.Failure("未返回额度信息")
-            else BalanceResult.Success(sb.toString())
+            parseOpenRouterQuota(json.toString())?.let { BalanceResult.Success(it) }
+                ?: BalanceResult.Failure("未返回额度信息")
         }
     } catch (e: IOException) {
         BalanceResult.Failure("网络错误：${e.message ?: "无法连接"}")
@@ -286,6 +268,41 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
                 if (msg.isNotBlank()) return if (code.isNotBlank()) "错误 $code：$msg" else msg
             }
             return null
+        }
+
+        /**
+         * 解析 OpenRouter `/api/v1/key` 返回的额度文案（纯逻辑，便于测试）。
+         * 覆盖累计/今日用量、剩余额度、额度上限、免费模型每日次数与免费档标注；无可用字段返回 null。
+         */
+        fun parseOpenRouterQuota(body: String): String? {
+            val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            val data = json.optJSONObject("data") ?: json
+            val usage = data.optDouble("usage", Double.NaN)
+            val usageDaily = data.optDouble("usage_daily", Double.NaN)
+            val limit = data.optDouble("limit", Double.NaN)
+            val limitRemaining = data.optDouble("limit_remaining", Double.NaN)
+            val freeTier = data.optBoolean("is_free_tier", false)
+            val freeDaily = data.optJSONObject("free_model_daily_requests")
+                ?.optInt("remaining", -1).takeIf { it != -1 }
+            val sb = StringBuilder()
+            if (!usage.isNaN()) sb.append("累计已用 $usage")
+            if (!usageDaily.isNaN()) {
+                if (sb.isNotEmpty()) sb.append("，")
+                sb.append("今日已用 $usageDaily")
+            }
+            if (!limitRemaining.isNaN()) {
+                if (sb.isNotEmpty()) sb.append("，")
+                sb.append("剩余额度 $limitRemaining")
+            } else if (!limit.isNaN()) {
+                if (sb.isNotEmpty()) sb.append("，")
+                sb.append("额度上限 $limit")
+            }
+            freeDaily?.let {
+                if (sb.isNotEmpty()) sb.append("，")
+                sb.append("免费模型今日剩 $it 次")
+            }
+            if (freeTier && sb.isNotEmpty()) sb.append("（免费档）")
+            return sb.toString().takeIf { it.isNotEmpty() }
         }
 
         /** 归一化网关地址（纯逻辑，便于测试）。 */

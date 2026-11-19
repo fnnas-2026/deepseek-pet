@@ -2,6 +2,7 @@ package com.ferry.pet
 
 import android.content.Intent
 import android.net.Uri
+import com.ferry.pet.account.Account
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.OpenableColumns
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         preferences = PetPreferences(this)
+        Account.bind(this)
         agreementOpen = !preferences.agreementAgreed()
         if (!BuildConfig.DEBUG && IntegrityGuard.suspectTampers(this)) finish()
         options = preferences.options()

@@ -204,7 +204,13 @@
     <string name="agreement_decline">不同意</string>
     <string name="agreement_view">查看协议</string>
     <string name="account_entry">第三方账号</string>
-    <string name="account_not_bound">未登录，第三方登录与免费额度待接入</string>
+    <string name="account_not_bound">未登录，绑定当前渠道后可在本机保存会话与额度</string>
     <string name="account_in">已登录</string>
     <string name="account_quota">额度</string>
+    <string name="account_login">绑定当前渠道</string>
+    <string name="account_logout">退出</string>
+    <string name="account_quota_refresh">查询额度</string>
+    <string name="account_quota_hint">额度信息仅在可公开查询的渠道展示，其余请前往官网控制台查看</string>
+    <string name="account_login_ok">已绑定本地会话</string>
+    <string name="channel_placeholder_account">请把地址中的 &lt;账号ID&gt; 替换为 Cloudflare 控制台的实际 Account ID</string>
 </resources>
