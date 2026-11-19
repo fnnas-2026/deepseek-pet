@@ -98,6 +98,7 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
             if (!response.isSuccessful) {
                 Result.Failure(friendlyError(response.code, body))
             } else {
+                businessError(body)?.let { return Result.Failure(it) }
                 val text = normalizeReply(parseOpenAiText(body))
                 if (text.isBlank()) Result.Failure("接口未返回有效内容") else Result.Success(text)
             }
@@ -138,6 +139,7 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
             if (!response.isSuccessful) {
                 Result.Failure(friendlyError(response.code, body))
             } else {
+                businessError(body)?.let { return Result.Failure(it) }
                 val json = JSONObject(body)
                 val text = normalizeReply(json.optJSONObject("message")?.optString("content").orEmpty())
                 if (text.isBlank()) Result.Failure("接口未返回有效内容") else Result.Success(text)
@@ -163,6 +165,7 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
             if (!response.isSuccessful) {
                 return@withContext ModelsResult.Failure(friendlyError(response.code, body))
             }
+            businessError(body)?.let { return@withContext ModelsResult.Failure(it) }
             val json = JSONObject(body)
             val arr = json.optJSONArray("data") ?: json.optJSONArray("models") ?: JSONArray()
             val list = (0 until arr.length()).mapNotNull { index ->
@@ -262,17 +265,28 @@ class ChatClient(private val channel: Channel, private val systemPrompt: String 
         BalanceResult.Failure("查询失败：${e.message ?: "未知错误"}")
     }
 
-    private fun errorSummary(body: String): String {
-        if (body.isBlank()) return ""
-        return runCatching {
-            JSONObject(body).optJSONObject("error")?.optString("message") ?: body.take(120)
-        }.getOrDefault(body.take(120))
-    }
+    private fun errorSummary(body: String): String = businessError(body) ?: body.take(120)
 
     companion object {
         private val MEDIA_JSON = "application/json; charset=utf-8".toMediaType()
         const val MAX_REPLY_CHARS = 4000
         const val MAX_CONTENT_CHARS = 8000
+
+        /**
+         * 识别「HTTP 200 但业务失败」的网关返回：兼容 OpenAI `error.message`
+         * 与智谱等后端 `success:false` + `msg` / `code`。无业务错误时返回 null。
+         */
+        fun businessError(body: String): String? {
+            if (body.isBlank()) return null
+            val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            json.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }?.let { return it }
+            if (json.optBoolean("success", true) == false) {
+                val msg = json.optString("msg").ifBlank { json.optString("message") }
+                val code = json.optString("code")
+                if (msg.isNotBlank()) return if (code.isNotBlank()) "错误 $code：$msg" else msg
+            }
+            return null
+        }
 
         /** 归一化网关地址（纯逻辑，便于测试）。 */
         fun normalizeBase(rawBase: String, isOllama: Boolean): String {

@@ -193,7 +193,7 @@ data class ChatOptions(
         val FREE_PRESETS = listOf(
             FreeModelPreset("zhipu", "智谱 GLM（免费 Flash）",
                 "https://open.bigmodel.cn/api/v1", "glm-4.5-flash", "openai",
-                "在 bigmodel.cn 申请 Key；免费模型 glm-4.5-flash / glm-4.7-flash，付费可换 glm-4.6、glm-5。",
+                "在 bigmodel.cn 控制台手动创建 API Key 后粘贴；免费模型 glm-4.5-flash（首选）/ glm-4.7-flash，付费可换 glm-4.6、glm-5。",
                 "https://bigmodel.cn/apikey"),
             FreeModelPreset("openrouter", "OpenRouter 聚合（免费模型）",
                 "https://openrouter.ai/api/v1", "free", "openai",

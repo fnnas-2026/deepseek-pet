@@ -2,6 +2,7 @@ package com.ferry.pet.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,5 +88,28 @@ class ChatClientLogicTest {
         val out = ChatClient.normalizeReply(long)
         assertTrue(out.endsWith("…（已截断）"))
         assertTrue(out.length <= ChatClient.MAX_REPLY_CHARS + 8)
+    }
+
+    @Test
+    fun `businessError reads zhipu success-false payload`() {
+        val body = """{"code":1001,"msg":"Header中未收到Authorization参数","success":false}"""
+        assertEquals("错误 1001：Header中未收到Authorization参数", ChatClient.businessError(body))
+    }
+
+    @Test
+    fun `businessError reads openai error message`() {
+        val body = """{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"""
+        assertEquals("Invalid API key", ChatClient.businessError(body))
+    }
+
+    @Test
+    fun `businessError returns null for normal choices response`() {
+        val body = """{"choices":[{"message":{"content":"pong"}}]}"""
+        assertNull(ChatClient.businessError(body))
+    }
+
+    @Test
+    fun `businessError returns null for blank body`() {
+        assertNull(ChatClient.businessError(""))
     }
 }
