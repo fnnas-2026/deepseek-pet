@@ -50,7 +50,7 @@ android {
         debug {
             isMinifyEnabled = false
             isShrinkResources = false
-            // 测试版：测试网关 Key 从本地 local.properties 注入（不入库）；缺省留空。
+            // 测试版：不内置任何渠道 Key，统一在渠道页运行时填写；local.properties 仅供本地临时调试注入。
             buildConfigField("String", "BUILD_FLAVOR", "\"test\"")
             buildConfigField("String", "DEFAULT_CHAT_KEY", "\"$localTestKey\"")
         }

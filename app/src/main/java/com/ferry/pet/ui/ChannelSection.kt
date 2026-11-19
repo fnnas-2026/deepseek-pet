@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,10 +28,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.ferry.pet.Channel
 import com.ferry.pet.ChatOptions
 import com.ferry.pet.PetPreferences
 import com.ferry.pet.R
+import com.ferry.pet.account.OAuthLoginActivity
+import com.ferry.pet.account.Pkce
 import com.ferry.pet.chat.ChatClient
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -58,6 +64,35 @@ fun ChannelSection(options: ChatOptions, onChanged: (ChatOptions) -> Unit) {
     var fetchedModels by remember { mutableStateOf<List<String>>(emptyList()) }
     var fetching by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf("") }
+    var balanceText by remember { mutableStateOf("") }
+    var balanceLoading by remember { mutableStateOf(false) }
+    var presetsExpanded by remember { mutableStateOf(false) }
+
+    // 临时保存 PKCE verifier，待回调 code 回来后用于换 Key。
+    var pendingVerifier by remember { mutableStateOf("") }
+    val oauthLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()) { result ->
+        val code = result.data?.getStringExtra("code").orEmpty()
+        if (result.resultCode == OAuthLoginActivity.RESULT_OK && code.isNotBlank() && pendingVerifier.isNotBlank()) {
+            scope.launch {
+                when (val ex = Pkce.exchange(code, pendingVerifier)) {
+                    is Pkce.ExchangeResult.Success -> editKey = ex.apiKey
+                    is Pkce.ExchangeResult.Failure -> fetchError = ex.message
+                }
+                pendingVerifier = ""
+            }
+        }
+    }
+
+    fun startOAuth() {
+        pendingVerifier = Pkce.newVerifier()
+        val callback = "ferrypet://oauth/callback"
+        val intent = android.content.Intent(context, OAuthLoginActivity::class.java).apply {
+            putExtra(OAuthLoginActivity.EXTRA_VERIFIER, pendingVerifier)
+            putExtra(OAuthLoginActivity.EXTRA_CALLBACK, callback)
+        }
+        oauthLauncher.launch(intent)
+    }
 
     fun emit() = onChanged(options.copy(channels = channels, activeChannelId = activeId))
 
@@ -71,6 +106,8 @@ fun ChannelSection(options: ChatOptions, onChanged: (ChatOptions) -> Unit) {
         editTemp = c?.temperature ?: .7f
         fetchedModels = emptyList()
         fetchError = ""
+        balanceText = ""
+        balanceLoading = false
     }
 
     SectionTitle(R.string.nav_channel)
@@ -117,6 +154,54 @@ fun ChannelSection(options: ChatOptions, onChanged: (ChatOptions) -> Unit) {
     }
 
     if (editingId != null) {
+        TextButton(onClick = { presetsExpanded = !presetsExpanded },
+            modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.free_model_preset),
+                    style = MaterialTheme.typography.titleSmall, color = Amber)
+                Text(if (presetsExpanded) "▾" else "▸", color = Muted)
+            }
+        }
+        if (presetsExpanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ChatOptions.FREE_PRESETS.forEach { preset ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .background(SurfaceVariant).padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(preset.label, color = TextLight)
+                            Text(preset.note, color = Muted,
+                                style = androidx.compose.ui.text.TextStyle(
+                                    fontSize = androidx.compose.ui.unit.TextUnit(12f,
+                                        androidx.compose.ui.unit.TextUnitType.Sp)))
+                        }
+                        TextButton(onClick = {
+                            editName = preset.label
+                            editBase = preset.baseUrl
+                            editModel = preset.defaultModel
+                            editApi = preset.api
+                        }) { Text(stringResource(R.string.free_model_fill)) }
+                        if (preset.id == "openrouter") {
+                            TextButton(onClick = { startOAuth() }) {
+                                Text(stringResource(R.string.oauth_login))
+                            }
+                        }
+                        if (preset.signupUrl.isNotBlank()) {
+                            TextButton(onClick = {
+                                runCatching {
+                                    context.startActivity(android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse(preset.signupUrl)))
+                                }
+                            }) { Text(stringResource(R.string.free_model_signup)) }
+                        }
+                    }
+                }
+            }
+        }
         OutlinedTextField(value = editName, onValueChange = { editName = it },
             modifier = Modifier.fillMaxWidth(),
             label = { Text(stringResource(R.string.channel_label)) }, singleLine = true)
@@ -166,8 +251,26 @@ fun ChannelSection(options: ChatOptions, onChanged: (ChatOptions) -> Unit) {
             }, enabled = !fetching) {
                 Text(stringResource(R.string.chat_fetch_models), Modifier.padding(horizontal = 4.dp))
             }
-            if (fetching) CircularProgressIndicator(modifier = Modifier.padding(8.dp), strokeWidth = 2.dp)
+            TextButton(onClick = {
+                balanceLoading = true; balanceText = ""; fetchError = ""
+                val snapshot = Channel(UUID.randomUUID().toString(), editName,
+                    editBase.trim(), editKey.trim(), editModel.trim(), editApi, editTemp)
+                scope.launch {
+                    when (val result = ChatClient(snapshot).fetchBalance()) {
+                        is ChatClient.BalanceResult.Success -> balanceText = result.text
+                        is ChatClient.BalanceResult.Unsupported -> balanceText = result.message
+                        is ChatClient.BalanceResult.Failure -> fetchError = result.message
+                    }
+                    balanceLoading = false
+                }
+            }, enabled = !balanceLoading) {
+                Text("查余额", Modifier.padding(horizontal = 4.dp))
+            }
+            if (fetching || balanceLoading)
+                CircularProgressIndicator(modifier = Modifier.padding(8.dp), strokeWidth = 2.dp)
         }
+        if (balanceText.isNotBlank()) Text(balanceText, color = Amber,
+            style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp))
         if (fetchError.isNotBlank()) Text(fetchError, color = Color(0xFFB00020))
 
         SettingSlider(label = R.string.chat_temperature,

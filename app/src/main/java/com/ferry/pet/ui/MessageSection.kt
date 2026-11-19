@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +27,10 @@ import androidx.compose.ui.unit.sp
 import com.ferry.pet.MessageChannel
 import com.ferry.pet.PetPreferences
 import com.ferry.pet.R
+import com.ferry.pet.chat.ChannelLinkParser
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import java.util.UUID
 
 /**
@@ -43,6 +48,8 @@ fun MessageSection(preferences: PetPreferences) {
     var editTarget by remember { mutableStateOf("") }
     var editToken by remember { mutableStateOf("") }
     var editEnabled by remember { mutableStateOf(false) }
+    var editBidirectional by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     fun persist(next: List<MessageChannel>) {
         channels = next
@@ -57,10 +64,29 @@ fun MessageSection(preferences: PetPreferences) {
         editTarget = c?.target.orEmpty()
         editToken = c?.apiKey.orEmpty()
         editEnabled = c?.enabled ?: false
+        editBidirectional = c?.bidirectional ?: false
+    }
+
+    fun parseClipboard() {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clip = cm?.primaryClip ?: return
+        val text = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).text?.toString() }
+            .firstOrNull().orEmpty()
+        val parsed = ChannelLinkParser.parse(text)
+        if (parsed.baseUrl.isBlank()) {
+            // 解析不到，保持原表单，不覆盖已填内容。
+            return
+        }
+        editBase = parsed.baseUrl
+        if (parsed.target.isNotBlank()) editTarget = parsed.target
+        if (parsed.apiKey.isNotBlank()) editToken = parsed.apiKey
+        if (parsed.kind.isNotBlank()) editKind = parsed.kind
     }
 
     SectionTitle(R.string.nav_message)
     Text(stringResource(R.string.msg_hint), color = Muted,
+        style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp))
+    Text(stringResource(R.string.msg_bind_tip), color = Muted,
         style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp))
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -106,15 +132,31 @@ fun MessageSection(preferences: PetPreferences) {
                     color = if (editKind == MessageChannel.KIND_WECHAT) Amber else Color.Unspecified)
             }
         }
+        Text(
+            stringResource(if (editKind == MessageChannel.KIND_WECHAT)
+                R.string.msg_wechat_guide else R.string.msg_qq_guide),
+            color = Muted, style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp))
         OutlinedTextField(value = editBase, onValueChange = { editBase = it },
             modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.msg_base_url)) },
             singleLine = true)
-        OutlinedTextField(value = editTarget, onValueChange = { editTarget = it },
-            modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.msg_target)) },
-            supportingText = { Text(stringResource(R.string.msg_target_hint)) }, singleLine = true)
+        if (editKind != MessageChannel.KIND_WECHAT) {
+            OutlinedTextField(value = editTarget, onValueChange = { editTarget = it },
+                modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.msg_target)) },
+                supportingText = { Text(stringResource(R.string.msg_target_hint)) }, singleLine = true)
+        }
         OutlinedTextField(value = editToken, onValueChange = { editToken = it },
             modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.msg_token)) },
             singleLine = true)
+
+        TextButton(onClick = { parseClipboard() }) { Text(stringResource(R.string.msg_paste_parse), color = Amber) }
+        Text(stringResource(R.string.msg_paste_hint), color = Muted,
+            style = androidx.compose.ui.text.TextStyle(fontSize = 12f.sp))
+
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Switch(checked = editBidirectional, onCheckedChange = { editBidirectional = it })
+            Text(stringResource(R.string.msg_bidirectional), color = TextLight)
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = {
@@ -122,7 +164,8 @@ fun MessageSection(preferences: PetPreferences) {
                     id = if (editingId == "new") UUID.randomUUID().toString() else editingId!!,
                     name = editName.trim().ifBlank { kindLabel(editKind) },
                     kind = editKind, baseUrl = editBase.trim(), target = editTarget.trim(),
-                    apiKey = editToken.trim(), enabled = editEnabled)
+                    apiKey = editToken.trim(), enabled = editEnabled,
+                    bidirectional = editBidirectional)
                 val list = channels.toMutableList()
                 val idx = list.indexOfFirst { it.id == saved.id }
                 if (idx >= 0) list[idx] = saved else list.add(saved)

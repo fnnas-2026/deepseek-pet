@@ -54,6 +54,9 @@ import com.ferry.pet.modules.WanderModule
 import com.ferry.pet.phone.ActionGate
 import com.ferry.pet.phone.ActionGate.Decision
 import com.ferry.pet.chat.Speaker
+import com.ferry.pet.chat.ChatClient
+import com.ferry.pet.chat.ChatMessage
+import com.ferry.pet.chat.MessageRelay
 import com.ferry.pet.ui.FloatingChatPanel
 import androidx.compose.ui.platform.ComposeView
 import java.io.FileDescriptor
@@ -145,6 +148,7 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
     private var confirmPanel: View? = null
     private var chatPanel: ComposeView? = null
     private var speaker: Speaker? = null
+    private var relay: MessageRelay? = null
     private val confirmPoll = object : Runnable {
         override fun run() {
             val pending = ActionGate.takePending()
@@ -229,6 +233,7 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
                 AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, packageName, permissionListener)
             publishState()
             updateVisibility()
+            startRelay()
         } catch (e: Exception) {
             Log.e(TAG, "Pet startup failed", e)
             fail(if (e is SecurityException) R.string.permission_required else R.string.assets_failed)
@@ -789,6 +794,52 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
         if (view != null) try { windows.removeViewImmediate(view) } catch (_: RuntimeException) { }
     }
 
+    // ---- 消息渠道双向收发 ---------------------------------------------------
+
+    private fun startRelay() {
+        val relay = MessageRelay { channel, text -> replyViaAi(channel, text) }
+        relay.channelsProvider = { preferences.messageChannels() }
+        relay.onSeen = { channel, seen ->
+            val updated = preferences.messageChannels().map {
+                if (it.id == channel.id) it.copy(lastSeen = seen) else it
+            }
+            preferences.saveMessageChannels(updated)
+        }
+        this.relay = relay
+        relay.start()
+    }
+
+    /**
+     * 收到渠道来消息后，用当前模型渠道 + 人设提示词请求 AI，返回助手文本；
+     * 失败返回 null（不回推错误到对方）。回复同时在桌宠气泡上播报。
+     */
+    private suspend fun replyViaAi(channel: com.ferry.pet.MessageChannel, text: String): String? {
+        val chat = preferences.chatOptions()
+        if (!chat.enabled) return null
+        val persona = preferences.allPersonas().firstOrNull { it.id == chat.personaId }
+        val client = ChatClient(chat.activeChannel, chat.systemPrompt, chat.activeChannel.temperature)
+        val history = listOf(ChatMessage("user", text))
+        val openerHistory = persona?.openers().orEmpty().flatMap {
+            listOf(ChatMessage("user", it.first), ChatMessage("assistant", it.second))
+        }
+        return when (val result = client.send(openerHistory + history)) {
+            is ChatClient.Result.Success -> {
+                val reply = result.reply
+                petMap[0]?.let { handle ->
+                    handler.post { showPhrase(handle, reply, 4000L) }
+                }
+                speaker?.speak(reply)
+                // 回写已处理时间戳，保持渠道配置最新。
+                val updated = preferences.messageChannels().map {
+                    if (it.id == channel.id) it.copy(lastSeen = System.currentTimeMillis()) else it
+                }
+                preferences.saveMessageChannels(updated)
+                reply
+            }
+            is ChatClient.Result.Failure -> null
+        }
+    }
+
     // ---- 悬浮聊天小窗（非全屏） ---------------------------------------------
 
     private fun toggleChatPanel() {
@@ -801,15 +852,19 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
         val view = ComposeView(this).apply {
             setContent { FloatingChatPanel(preferences = preferences, speaker = sp, onClose = { closeChatPanel() }) }
         }
+        val dm = resources.displayMetrics.density
         val p = WindowManager.LayoutParams(
-            (320 * resources.displayMetrics.density).roundToInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            (320 * dm).roundToInt(),
+            (420 * dm).roundToInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            // 聊天窗需要输入框获得焦点并弹出键盘：不能带 FLAG_NOT_FOCUSABLE。
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT)
         p.gravity = Gravity.END or Gravity.TOP
-        p.y = (80 * resources.displayMetrics.density).roundToInt()
-        p.x = (12 * resources.displayMetrics.density).roundToInt()
+        p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        p.y = (80 * dm).roundToInt()
+        p.x = (12 * dm).roundToInt()
         chatPanel = view
         try { windows.addView(view, p) } catch (e: RuntimeException) {
             Log.e(TAG, "Cannot attach chat panel", e); chatPanel = null
@@ -904,6 +959,8 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
         removeAuxiliary(confirmPanel)
         confirmPanel = null
         closeChatPanel()
+        relay?.stop()
+        relay = null
         speaker?.release()
         speaker = null
         removeWindows()

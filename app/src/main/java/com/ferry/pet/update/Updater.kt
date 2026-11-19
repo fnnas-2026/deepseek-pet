@@ -92,7 +92,7 @@ object Updater {
             if (file.length() <= 0) return Download.Failure("下载文件为空")
             expectedSize?.let {
                 if (file.length() != it) {
-                    file.delete(); return Download.Failure("文件大小不符，已丢弃")
+                    file.delete(); return Download.Failure("文件大小不符（${file.length()}≠$it），换下一条线路")
                 }
             }
             sha256?.let { expected ->
@@ -100,7 +100,7 @@ object Updater {
                     "%02x".format(b)
                 }.orEmpty()
                 if (!actual.equals(expected, ignoreCase = true)) {
-                    file.delete(); return Download.Failure("摘要校验未通过，已丢弃")
+                    file.delete(); return Download.Failure("摘要校验未通过，换下一条线路")
                 }
             }
             Download.Done(file)

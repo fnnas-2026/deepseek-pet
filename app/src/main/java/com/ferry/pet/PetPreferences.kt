@@ -102,12 +102,28 @@ data class MessageChannel(
     val target: String,        // QQ 号 / 群号 / 可选 @ 标识
     val apiKey: String = "",   // 可选：接入端 Token / Secret
     val enabled: Boolean = false,
+    /** 双向：开启后轮询拉取对方消息，经 AI 回复后回推。 */
+    val bidirectional: Boolean = false,
+    /** 上次已处理消息的时间戳（毫秒），用于只处理新消息。 */
+    val lastSeen: Long = 0L,
 ) {
     companion object {
         const val KIND_QQ = "qq"
         const val KIND_WECHAT = "wechat"
     }
 }
+
+/** 可选免费/公开模型预设：网关地址 + 默认模型 + 说明，Key 由用户自填。 */
+data class FreeModelPreset(
+    val id: String,
+    val label: String,
+    val baseUrl: String,
+    val defaultModel: String,
+    val api: String,
+    val note: String,
+    /** 官网申请/控制台地址（公开页面），用于跳转获取 Key。 */
+    val signupUrl: String = "",
+)
 
 /** AI 聊天入口配置。支持多模型渠道（可增删改、切换）；人设参考 AstrBot。
  *  api 为接口风格：openai（/v1/chat/completions、/v1/models）或 ollama（/api/chat、/api/tags）。 */
@@ -132,10 +148,10 @@ data class ChatOptions(
     val api: String get() = activeChannel.api
 
     companion object {
-        /** 内置测试网关（OpenAI 兼容，HTTPS；默认 gemini-2.5-flash）。
-         *  Key 由构建类型注入：测试版(debug)带内置密钥，正式版(release)为空、运行时填写。 */
-        const val DEFAULT_CHAT_BASE_URL = "https://weiwan.me/v1"
-        const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+        /** 默认渠道：不内置外部网关与密钥，地址/模型/Key 均由用户在渠道页填写或一键套用预设。
+         *  默认 Key 由构建类型注入：release 为空；debug 仅从本地 local.properties 临时注入、不入库。 */
+        const val DEFAULT_CHAT_BASE_URL = ""
+        const val DEFAULT_CHAT_MODEL = ""
         const val DEFAULT_CHAT_API = "openai"
 
         val DEFAULT_CHANNEL = Channel(
@@ -168,6 +184,40 @@ data class ChatOptions(
                 listOf("按计划执行即可。", "请确认当前步骤。", "数据已核对无误。", "优先处理关键事项。")),
         )
         val DEFAULT_PERSONA = PRESETS.first()
+
+        /**
+         * 可选的公开/免费模型预设（OpenAI 兼容）。仅给出网关地址与默认模型，
+         * 不内置任何 Key；使用前需在渠道里填入你自己申请的密钥。
+         * 若某预设后端不可用，可直接改用自定义渠道。
+         */
+        val FREE_PRESETS = listOf(
+            FreeModelPreset("zhipu", "智谱 GLM（免费 Flash）",
+                "https://open.bigmodel.cn/api/v1", "glm-4.5-flash", "openai",
+                "在 bigmodel.cn 申请 Key；免费模型 glm-4.5-flash / glm-4.7-flash，付费可换 glm-4.6、glm-5。",
+                "https://bigmodel.cn/apikey"),
+            FreeModelPreset("openrouter", "OpenRouter 聚合（免费模型）",
+                "https://openrouter.ai/api/v1", "free", "openai",
+                "在 OpenRouter 申请免费 Key，模型名可在其模型库选择，如 :free 后缀条目。",
+                "https://openrouter.ai/keys"),
+            FreeModelPreset("groq", "Groq 公开接口（免费额度）",
+                "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", "openai",
+                "在 Groq 控制台申请免费 Key，速度快，有免费额度限制。",
+                "https://console.groq.com/keys"),
+            FreeModelPreset("deepseek", "DeepSeek 官方（按量计费）",
+                "https://api.deepseek.com/v1", "deepseek-chat", "openai",
+                "在 DeepSeek 开放平台申请 Key，模型按用量计费；渠道页可查询账户余额。",
+                "https://platform.deepseek.com/api_keys"),
+            FreeModelPreset("qwen", "阿里云百炼 通义千问（免费额度）",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo", "openai",
+                "在阿里云百炼控制台创建 API-Key，兼容 OpenAI 接口；新用户有免费额度。",
+                "https://bailian.console.aliyun.com/?apiKey=1#/api-key"),
+            FreeModelPreset("siliconflow", "硅基流动 SiliconFlow（免费模型）",
+                "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct", "openai",
+                "在硅基流动控制台新建 API Key，部分开源模型免费；账单需在官网查看。",
+                "https://cloud.siliconflow.cn/account/ak"),
+        )
+
+        fun freePresetById(id: String) = FREE_PRESETS.firstOrNull { it.id == id }
 
         fun presetById(id: String) = PRESETS.firstOrNull { it.id == id } ?: DEFAULT_PERSONA
 
@@ -228,6 +278,14 @@ class PetPreferences(context: Context) {
          * 经 jsDelivr 三个 CDN 线路拉取；与上游 dsh-pet 的静态清单模式一致。
          */
         const val DEFAULT_UPDATE_ENDPOINT = BuildConfig.UPDATE_ENDPOINT
+
+        /** 旧版本遗留的废弃清单域名片段（升级后自动迁移回默认线路）。 */
+        private val legacyHostFragments = listOf("800705.xyz", "newapi.800705.xyz")
+
+        /** 识别旧版本遗留的废弃/占位清单域名，升级后不再使用。 */
+        fun isLegacyEndpoint(url: String): Boolean =
+            legacyHostFragments.any { url.contains(it, ignoreCase = true) }
+
         private const val KEY_PHRASES = "phrases"
         private const val KEY_SPEECH_MIN = "speechMin"
         private const val KEY_SPEECH_MAX = "speechMax"
@@ -257,6 +315,7 @@ class PetPreferences(context: Context) {
         private const val KEY_TTS_ENABLED = "ttsEnabled"
         private const val KEY_TTS_RATE = "ttsRate"
         private const val KEY_MSG_CHANNELS = "msgChannels"
+        private const val KEY_AGREED = "agreementAgreed"
         // 旧版单渠道字段（仅用于迁移）。
         private const val LEGACY_CHAT_BASE_URL = "chatBaseUrl"
         private const val LEGACY_CHAT_KEY = "chatKey"
@@ -430,6 +489,8 @@ class PetPreferences(context: Context) {
                     target = o.optString("target"),
                     apiKey = o.optString("apiKey"),
                     enabled = o.optBoolean("enabled", false),
+                    bidirectional = o.optBoolean("bidirectional", false),
+                    lastSeen = o.optLong("lastSeen", 0L),
                 ).takeIf { it.id.isNotBlank() && it.baseUrl.isNotBlank() }
             }
         }.getOrDefault(emptyList())
@@ -441,7 +502,8 @@ class PetPreferences(context: Context) {
             arr.put(org.json.JSONObject()
                 .put("id", c.id).put("name", c.name).put("kind", c.kind)
                 .put("baseUrl", c.baseUrl).put("target", c.target)
-                .put("apiKey", c.apiKey).put("enabled", c.enabled))
+                .put("apiKey", c.apiKey).put("enabled", c.enabled)
+                .put("bidirectional", c.bidirectional).put("lastSeen", c.lastSeen))
         }
         prefs.edit().putString(KEY_MSG_CHANNELS, arr.toString()).apply()
     }
@@ -455,18 +517,42 @@ class PetPreferences(context: Context) {
     }
 
     /** 全部人格：内置预设 + 本机自定义。 */
-    fun allPersonas(): List<ChatOptions.Persona> =
-        ChatOptions.PRESETS + customPersonas()
+    fun allPersonas(): List<ChatOptions.Persona> {
+        val builtin = ChatOptions.PRESETS
+        val custom = customPersonas().filter { c -> builtin.none { it.id == c.id } }
+        return (builtin + custom).distinctBy { it.id }
+    }
 
     /**
-     * 热更新检查地址。默认占位子域名清单（待域名与 DNS 凭证到位后替换为真实地址）；
-     * 用户在「更新与关于」页填写后覆盖此默认值；留空则跳过检查。
+     * 热更新检查地址。默认走仓库主干 + jsDelivr 三线路 CDN；
+     * 旧版本曾把废弃占位域名持久化到本地，升级后需自动迁移回默认线路，避免旧值覆盖新默认。
      */
-    fun updateEndpoint(): String =
-        prefs.getString(KEY_UPDATE_URL, DEFAULT_UPDATE_ENDPOINT).orEmpty().ifBlank { DEFAULT_UPDATE_ENDPOINT }
+    fun updateEndpoint(): String {
+        val stored = prefs.getString(KEY_UPDATE_URL, DEFAULT_UPDATE_ENDPOINT).orEmpty().trim()
+        if (stored.isBlank() || isLegacyEndpoint(stored)) {
+            // 旧废弃地址不再使用：清除本地残留，回落到默认三线路。
+            if (prefs.contains(KEY_UPDATE_URL)) prefs.edit().remove(KEY_UPDATE_URL).apply()
+            return DEFAULT_UPDATE_ENDPOINT
+        }
+        return stored
+    }
 
     fun saveUpdateEndpoint(url: String) {
         prefs.edit().putString(KEY_UPDATE_URL, url.trim()).apply()
+    }
+
+    /** 恢复默认更新清单线路（清除本地自定义地址）。 */
+    fun resetUpdateEndpoint() {
+        prefs.edit().remove(KEY_UPDATE_URL).apply()
+    }
+
+
+
+    /** 是否已同意用户协议与隐私政策。 */
+    fun agreementAgreed(): Boolean = prefs.getBoolean(KEY_AGREED, false)
+
+    fun saveAgreementAgreed(agreed: Boolean) {
+        prefs.edit().putBoolean(KEY_AGREED, agreed).apply()
     }
 
     fun saveCustomPersonas(personas: List<ChatOptions.Persona>) {

@@ -7,18 +7,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.ferry.pet.BuildConfig
+import com.ferry.pet.account.Account
 import com.ferry.pet.PetRuntime
 import com.ferry.pet.R
 import com.ferry.pet.RuntimeState
 
 /** 关于与诊断：版本、运行状态与关键性能计数，便于排查卡顿/素材/模块问题。 */
 @Composable
-fun AboutSection(runtime: RuntimeState) {
+fun AboutSection(runtime: RuntimeState, onOpenAgreement: (AgreementType) -> Unit = {}) {
     SectionTitle(R.string.nav_about)
 
     DiagRow(stringResource(R.string.version_label), BuildConfig.VERSION_NAME)
@@ -37,6 +39,30 @@ fun AboutSection(runtime: RuntimeState) {
 
     runtime.error?.let { Text(it, color = MaterialTheme.colorScheme.error,
         style = MaterialTheme.typography.bodyMedium) }
+
+    AccountQuotaCard()
+
+    AgreementEntries(onOpen = onOpenAgreement)
+}
+
+/** 第三方账号 / 免费额度占位卡片：接入真实接口前展示未接入说明。 */
+@Composable
+private fun AccountQuotaCard() {
+    val loggedIn = Account.instance.isLoggedIn()
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween) {
+        Column {
+            Text(stringResource(R.string.account_entry), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                if (loggedIn) Account.instance.displayName().ifBlank {
+                    stringResource(R.string.account_in)
+                }
+                else stringResource(R.string.account_not_bound),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        TextButton(onClick = { }) { Text(stringResource(R.string.account_quota)) }
+    }
 }
 
 @Composable

@@ -25,6 +25,7 @@
 # ---- 应用内通过 Manifest 注册的四大组件必须保留（类名需与 Manifest 一致）----
 -keep class com.ferry.pet.MainActivity { *; }
 -keep class com.ferry.pet.ChatActivity { *; }
+-keep class com.ferry.pet.account.OAuthLoginActivity { *; }
 -keep class com.ferry.pet.PetOverlayService { *; }
 -keep class com.ferry.pet.phone.PetA11yService { *; }
 

@@ -129,13 +129,23 @@ object UpdateChecker {
         return JSONObject(String(body, Charsets.UTF_8))
     }
 
-    /** HTTPS + 主机白名单校验；重定向由 OkHttp 跟随，目标同样需过白名单。 */
+    /**
+     * HTTPS + 主机白名单校验；重定向由 OkHttp 跟随，目标同样需过白名单。
+     * 兼容 `镜像前缀/https://github.com/...` 形式：取末尾真实地址再校验主机。
+     */
     fun isTrustedHttps(url: String): Boolean {
+        val target = unwrapMirror(url)
         return runCatching {
-            val parsed = URL(url)
+            val parsed = URL(target)
             val host = parsed.host.lowercase().trimEnd('.')
             parsed.protocol.equals("https", ignoreCase = true) && host.isNotEmpty() &&
                 (host in trustedHosts || trustedHosts.any { host.endsWith(".$it") })
         }.getOrDefault(false)
+    }
+
+    /** 若为 `镜像域名/https://真实地址` 形式，抽出末尾真实地址；否则原样返回。 */
+    private fun unwrapMirror(url: String): String {
+        val idx = url.indexOf("https://", 8)
+        return if (idx > 0) url.substring(idx) else url
     }
 }

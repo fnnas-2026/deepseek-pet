@@ -19,9 +19,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -45,8 +48,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.ferry.pet.R
 import com.ferry.pet.chat.ChatClient
 import com.ferry.pet.chat.ChatMessage
+import com.ferry.pet.chat.VoiceInput
 import kotlinx.coroutines.launch
 
 /**
@@ -78,7 +83,25 @@ private fun ChatScreen(onBack: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var listening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    var voice by remember { mutableStateOf<VoiceInput?>(null) }
+    val startVoice: () -> Unit = {
+        val v = voice ?: VoiceInput(context, onResult = {
+            input = if (input.isBlank()) it else "$input $it"
+            listening = false
+        }, onError = { status = it; listening = false }).also { voice = it }
+        listening = true; status = "正在聆听…"
+        v.start()
+    }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startVoice() else status = "缺少录音权限"
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { voice?.destroy() }
+    }
 
     // 当前人格及其开场白（user/assistant 交替），作为首轮上下文注入。
     val persona = remember(saved.personaId) {
@@ -172,6 +195,15 @@ private fun ChatScreen(onBack: () -> Unit) {
                         placeholder = { Text(stringResource(R.string.chat_input_hint), color = MutedAmber) },
                         maxLines = 4,
                     )
+                    IconButton(onClick = {
+                        if (listening) { voice?.destroy(); listening = false; status = "" }
+                        else if (VoiceInput.hasPermission(context)) startVoice()
+                        else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+                    }) {
+                        Icon(painterResource(if (listening) R.drawable.ic_mic_off else R.drawable.ic_mic),
+                            contentDescription = null,
+                            tint = if (listening) Color(0xFFE06A6A) else Amber)
+                    }
                     IconButton(
                         onClick = {
                             val text = input.trim()

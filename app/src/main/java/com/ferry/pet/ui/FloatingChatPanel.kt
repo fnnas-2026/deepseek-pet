@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
@@ -35,10 +38,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ferry.pet.ChatOptions
 import com.ferry.pet.PetPreferences
+import com.ferry.pet.R
 import com.ferry.pet.chat.ChatClient
 import com.ferry.pet.chat.ChatMessage
 import com.ferry.pet.chat.MessagePusher
 import com.ferry.pet.chat.Speaker
+import com.ferry.pet.chat.VoiceInput
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
 /**
@@ -58,15 +64,38 @@ fun FloatingChatPanel(
     }
     val openers = remember(persona.id) { persona.openers() }
 
+    val context = LocalContext.current
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var listening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    var voice by remember { mutableStateOf<VoiceInput?>(null) }
+
+    val startVoice: () -> Unit = {
+        val v = voice ?: VoiceInput(context, onResult = {
+            input = if (input.isBlank()) it else "$input $it"
+            listening = false
+        }, onError = { status = it; listening = false }).also { voice = it }
+        listening = true; status = "正在聆听…"
+        v.start()
+    }
+
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startVoice() else status = "缺少录音权限"
+    }
+
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { voice?.destroy() }
+    }
 
     Column(
         Modifier
             .widthIn(max = 320.dp)
+            .heightIn(max = 420.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(DeepBg)
             .padding(12.dp),
@@ -103,7 +132,7 @@ fun FloatingChatPanel(
             }
         }
 
-        LazyColumn(Modifier.heightIn(max = 220.dp).fillMaxWidth(),
+        LazyColumn(Modifier.weight(1f, fill = false).heightIn(max = 220.dp).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(messages) { msg -> FloatBubble(msg, saved.characterName.ifBlank { persona.name }) }
         }
@@ -118,6 +147,15 @@ fun FloatingChatPanel(
                 placeholder = { Text("说点什么…", color = MutedAmber) },
                 maxLines = 3,
             )
+            IconButton(onClick = {
+                if (listening) { voice?.destroy(); listening = false; status = "" }
+                else if (VoiceInput.hasPermission(context)) startVoice()
+                else micPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            }) {
+                Icon(painterResource(if (listening) R.drawable.ic_mic_off else R.drawable.ic_mic),
+                    contentDescription = null,
+                    tint = if (listening) Color(0xFFE06A6A) else Amber)
+            }
             IconButton(onClick = {
                 val text = input.trim()
                 if (text.isEmpty() || busy) return@IconButton

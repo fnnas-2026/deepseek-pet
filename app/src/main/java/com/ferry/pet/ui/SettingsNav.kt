@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.ferry.pet.BuildConfig
 import com.ferry.pet.ChatOptions
@@ -62,7 +63,7 @@ import com.ferry.pet.update.Updater
 import kotlinx.coroutines.launch
 
 /** 二级菜单页面标识。 */
-enum class SettingsPage { HOME, APPEARANCE, INTERACTION, CHAT, PERSONA, CHANNEL, MESSAGE, PERMISSION, UPDATE }
+enum class SettingsPage { HOME, APPEARANCE, INTERACTION, PLUGINS, CHAT, PERSONA, CHANNEL, MESSAGE, PERMISSION, UPDATE, AGREEMENT }
 
 /**
  * 设置主页 + 二级菜单导航。主页只展示分组入口卡片，各分组内容进入对应二级页面，
@@ -85,6 +86,7 @@ fun SettingsNav(
     onReset: () -> Unit,
 ) {
     var page by remember { mutableStateOf(SettingsPage.HOME) }
+    var agreementType by remember { mutableStateOf(AgreementType.USER) }
     val context = LocalContext.current
     val preferences = remember { PetPreferences(context) }
 
@@ -114,6 +116,9 @@ fun SettingsNav(
             CollisionSection(options) { onSave(it) }
             DivinationSection(options) { onSave(it) }
         }
+        SettingsPage.PLUGINS -> SubPage(titleRes = R.string.nav_plugins, onBack = { page = SettingsPage.HOME }) {
+            PluginSection(options) { onSave(it) }
+        }
         SettingsPage.CHAT -> SubPage(titleRes = R.string.nav_chat, onBack = { page = SettingsPage.HOME }) {
             MenuCard(R.string.nav_persona, R.string.nav_persona_desc) { page = SettingsPage.PERSONA }
             MenuCard(R.string.nav_channel, R.string.nav_channel_desc) { page = SettingsPage.CHANNEL }
@@ -132,8 +137,18 @@ fun SettingsNav(
             PermissionPage(overlayAllowed = overlayAllowed)
         }
         SettingsPage.UPDATE -> SubPage(titleRes = R.string.nav_update, onBack = { page = SettingsPage.HOME }) {
-            UpdatePage(preferences = preferences, onReset = onReset)
-            AboutSection(runtime = runtime)
+            UpdatePage(preferences = preferences, onReset = onReset,
+                onResetEndpoint = { preferences.resetUpdateEndpoint() })
+            AboutSection(runtime = runtime) { agreementType = it; page = SettingsPage.AGREEMENT }
+        }
+        SettingsPage.AGREEMENT -> SubPage(
+            titleRes = when (agreementType) {
+                AgreementType.USER -> R.string.agreement_user
+                AgreementType.PRIVACY -> R.string.agreement_privacy
+                AgreementType.SECURITY -> R.string.agreement_security
+            },
+            onBack = { page = SettingsPage.UPDATE }) {
+            AgreementPage(agreementType)
         }
     }
 }
@@ -173,11 +188,17 @@ private fun HomePage(
             }
         }
 
-        MenuCard(R.string.nav_appearance, R.string.nav_appearance_desc) { onOpen(SettingsPage.APPEARANCE) }
-        MenuCard(R.string.nav_interaction, R.string.nav_interaction_desc) { onOpen(SettingsPage.INTERACTION) }
-        MenuCard(R.string.nav_chat, R.string.nav_chat_desc) { onOpen(SettingsPage.CHAT) }
-        MenuCard(R.string.nav_permission, R.string.nav_permission_desc) { onOpen(SettingsPage.PERMISSION) }
-        MenuCard(R.string.nav_update, R.string.nav_update_desc) { onOpen(SettingsPage.UPDATE) }
+        GroupLabel(stringResource(R.string.group_pet))
+        MenuCard(R.string.nav_appearance, R.string.nav_appearance_desc, R.drawable.ic_appearance) { onOpen(SettingsPage.APPEARANCE) }
+        MenuCard(R.string.nav_interaction, R.string.nav_interaction_desc, R.drawable.ic_interaction) { onOpen(SettingsPage.INTERACTION) }
+        MenuCard(R.string.nav_plugins, R.string.nav_plugins_desc, R.drawable.ic_plugins) { onOpen(SettingsPage.PLUGINS) }
+
+        GroupLabel(stringResource(R.string.group_smart))
+        MenuCard(R.string.nav_chat, R.string.nav_chat_desc, R.drawable.ic_chat) { onOpen(SettingsPage.CHAT) }
+
+        GroupLabel(stringResource(R.string.group_system))
+        MenuCard(R.string.nav_permission, R.string.nav_permission_desc, R.drawable.ic_permission) { onOpen(SettingsPage.PERMISSION) }
+        MenuCard(R.string.nav_update, R.string.nav_update_desc, R.drawable.ic_update) { onOpen(SettingsPage.UPDATE) }
 
         Text(stringResource(R.string.version, BuildConfig.VERSION_NAME),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -186,7 +207,19 @@ private fun HomePage(
 }
 
 @Composable
-private fun MenuCard(titleRes: Int, descRes: Int, onClick: () -> Unit) {
+private fun GroupLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.tertiary,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+}
+
+@Composable
+private fun MenuCard(
+    titleRes: Int,
+    descRes: Int,
+    iconRes: Int? = null,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface)
@@ -194,6 +227,11 @@ private fun MenuCard(titleRes: Int, descRes: Int, onClick: () -> Unit) {
             .padding(18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (iconRes != null) {
+            androidx.compose.material3.Icon(
+                painter = painterResource(iconRes), contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(stringResource(titleRes), style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface)
@@ -218,7 +256,8 @@ private fun SubPage(titleRes: Int, onBack: () -> Unit, content: @Composable () -
                 color = MaterialTheme.colorScheme.primary)
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 8.dp),
+            .padding(androidx.compose.foundation.layout.PaddingValues(
+                start = 24.dp, end = 24.dp, top = 8.dp, bottom = 24.dp)),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             content()
         }
@@ -270,22 +309,26 @@ private fun PermissionRow(title: String, granted: Boolean, onJump: () -> Unit) {
 }
 
 @Composable
-private fun UpdatePage(preferences: PetPreferences, onReset: () -> Unit) {
+private fun UpdatePage(
+    preferences: PetPreferences,
+    onReset: () -> Unit,
+    onResetEndpoint: () -> Unit,
+) {
     val context = LocalContext.current
     var updateBusy by remember { mutableStateOf(false) }
     var updateMessage by remember { mutableStateOf("") }
     var newerRelease by remember { mutableStateOf<UpdateChecker.Release?>(null) }
     var downloadPercent by remember { mutableStateOf(-1) }
-    var updateUrl by remember { mutableStateOf(preferences.updateEndpoint()) }
     var changelogOpen by remember { mutableStateOf(false) }
+    var endpoint by remember { mutableStateOf(preferences.updateEndpoint()) }
     val scope = rememberCoroutineScope()
 
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         TextButton(onClick = {
+            endpoint = preferences.updateEndpoint()
             updateBusy = true; updateMessage = ""; newerRelease = null; downloadPercent = -1
-            preferences.saveUpdateEndpoint(updateUrl)
             scope.launch {
-                when (val result = UpdateChecker.check(preferences.updateEndpoint(), BuildConfig.VERSION_CODE)) {
+                when (val result = UpdateChecker.check(endpoint, BuildConfig.VERSION_CODE)) {
                     is UpdateChecker.Result.UpToDate -> updateMessage = context.getString(R.string.update_up_to_date)
                     is UpdateChecker.Result.Newer -> { newerRelease = result.release
                         updateMessage = context.getString(R.string.update_found, result.release.versionName) }
@@ -296,18 +339,22 @@ private fun UpdatePage(preferences: PetPreferences, onReset: () -> Unit) {
         }) { Text(stringResource(R.string.check_update)) }
         TextButton(onClick = { changelogOpen = true }) { Text(stringResource(R.string.changelog)) }
     }
-    OutlinedTextField(
-        value = updateUrl, onValueChange = { updateUrl = it },
-        modifier = Modifier.fillMaxWidth(), singleLine = true,
-        label = { Text(stringResource(R.string.update_endpoint)) },
-        supportingText = { Text(stringResource(R.string.update_endpoint_hint)) })
+    Text(stringResource(R.string.update_endpoint_hint), color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = androidx.compose.ui.text.TextStyle(fontSize = 12.sp))
     if (updateBusy) CircularProgressIndicator(modifier = Modifier.padding(8.dp), strokeWidth = 2.dp)
     if (updateMessage.isNotBlank()) Text(updateMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (downloadPercent in 0..100) Text(context.getString(R.string.update_downloading, downloadPercent),
         color = MaterialTheme.colorScheme.onSurfaceVariant)
 
     HorizontalDivider()
-    TextButton(onClick = onReset) { Text(stringResource(R.string.reset)) }
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        TextButton(onClick = {
+            onResetEndpoint()
+            endpoint = preferences.updateEndpoint()
+            updateMessage = ""
+        }) { Text(stringResource(R.string.reset)) }
+        TextButton(onClick = onReset) { Text("恢复全部默认") }
+    }
     Text(stringResource(R.string.version, BuildConfig.VERSION_NAME),
         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
 

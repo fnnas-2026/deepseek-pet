@@ -16,8 +16,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -29,6 +32,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.ferry.pet.security.IntegrityGuard
+import com.ferry.pet.ui.AgreementType
+import com.ferry.pet.ui.AgreementPage
 import com.ferry.pet.ui.SettingsNav
 
 class MainActivity : ComponentActivity() {
@@ -40,11 +45,14 @@ class MainActivity : ComponentActivity() {
     private var builtinCount by mutableStateOf(0)
     private var preview: ClickAudio? = null
     private var previewState by mutableStateOf(ClickAudio.State.IDLE)
+    private var agreementOpen by mutableStateOf(false)
+    private var viewingAgreement by mutableStateOf<AgreementType?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         preferences = PetPreferences(this)
+        agreementOpen = !preferences.agreementAgreed()
         if (!BuildConfig.DEBUG && IntegrityGuard.suspectTampers(this)) finish()
         options = preferences.options()
         chatOptions = preferences.chatOptions()
@@ -109,8 +117,64 @@ class MainActivity : ComponentActivity() {
                     onPickAudio = { audioPicker.launch(arrayOf("audio/*")) },
                     onReset = ::resetAll,
                 )
+
+                if (agreementOpen) AgreementDialog(
+                    onAgree = {
+                        preferences.saveAgreementAgreed(true)
+                        agreementOpen = false
+                    },
+                    onDecline = { finish() },
+                    onView = { viewingAgreement = it },
+                )
+                viewingAgreement?.let { type ->
+                    AgreementViewerDialog(type, onClose = { viewingAgreement = null })
+                }
             }
         }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun AgreementDialog(
+        onAgree: () -> Unit,
+        onDecline: () -> Unit,
+        onView: (AgreementType) -> Unit,
+    ) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.agreement_dialog_title)) },
+            text = {
+                androidx.compose.foundation.layout.Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.agreement_dialog_body),
+                        style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { onView(AgreementType.USER) }) {
+                        Text(stringResource(R.string.agreement_user))
+                    }
+                    TextButton(onClick = { onView(AgreementType.PRIVACY) }) {
+                        Text(stringResource(R.string.agreement_privacy))
+                    }
+                    TextButton(onClick = { onView(AgreementType.SECURITY) }) {
+                        Text(stringResource(R.string.agreement_security))
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = onAgree) { Text(stringResource(R.string.agreement_agree)) } },
+            dismissButton = { TextButton(onClick = onDecline) { Text(stringResource(R.string.agreement_decline)) } },
+        )
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun AgreementViewerDialog(type: AgreementType, onClose: () -> Unit) {
+        AlertDialog(
+            onDismissRequest = onClose,
+            title = { Text(stringResource(when (type) {
+                AgreementType.USER -> R.string.agreement_user
+                AgreementType.PRIVACY -> R.string.agreement_privacy
+                AgreementType.SECURITY -> R.string.agreement_security
+            })) },
+            text = { AgreementPage(type) },
+            confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.cancel)) } },
+        )
     }
 
     private fun previewSound() {
